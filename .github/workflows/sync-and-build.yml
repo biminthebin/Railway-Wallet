@@ -1,0 +1,69 @@
+name: Sync Protocol Deps + Build APK
+
+# Runs daily at 8am UTC.
+# If any @railgun-community/* or ethers version changed on upstream desktop,
+# updates mobile/package.json and mobile/nodejs-src/nodejs-project/package.json
+# to match (same-major updates only), commits the change, then triggers a
+# fresh APK build automatically.
+#
+# Manual trigger is also available for on-demand syncs.
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # daily 8am UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to commit + push dep updates
+  actions: write    # needed to trigger build-android-apk.yml
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Use the built-in token so the commit shows as github-actions[bot]
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # ── Run the sync script ───────────────────────────────────────
+      - name: Sync protocol deps from upstream desktop
+        id: sync
+        run: node scripts/sync-protocol-deps.js
+
+      # ── Commit + push if anything changed ────────────────────────
+      - name: Commit updated deps
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add mobile/package.json \
+                  mobile/nodejs-src/nodejs-project/package.json
+          git commit -m "chore: sync RAILGUN protocol deps from upstream
+
+Packages updated: ${{ steps.sync.outputs.summary }}"
+          git push
+
+      # ── Trigger APK build if deps changed ────────────────────────
+      - name: Trigger APK build
+        if: steps.sync.outputs.changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              workflow_id: 'build-android-apk.yml',
+              ref: 'main'
+            });
+            console.log('APK build workflow triggered.');
+
+      # ── Always print what happened to the job summary ─────────────
+      - name: Summary
+        if: steps.sync.outputs.changed != 'true'
+        run: echo "## No protocol dep changes found — APK build skipped." >> $GITHUB_STEP_SUMMARY
