@@ -69,6 +69,12 @@ jobs:
           # Skip postinstall: it runs pod-install (iOS/macOS only) and yarn lint.
           # We run patch-package and jetify explicitly in the next steps.
           SKIP_POSTINSTALL: "1"
+          # Yarn 4 automatically enables immutable installs when CI=true (set by
+          # GitHub Actions). Our version pins downgrade react-native-svg and
+          # @react-navigation/bottom-tabs to match their patch files, which
+          # requires yarn.lock to be updated. Explicitly allow it here — drift
+          # prevention comes from the node_modules cache key above, not immutability.
+          YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
 
       - name: Apply patches
         if: steps.yarn-modules-cache.outputs.cache-hit != 'true'
