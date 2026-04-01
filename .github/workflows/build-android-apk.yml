@@ -1,0 +1,114 @@
+name: Build Android Debug APK
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 9 * * 1'   # Every Monday 9am UTC
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Toolchain ────────────────────────────────────────────────
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Enable Corepack + Yarn 4.5.1
+        run: |
+          corepack enable
+          corepack prepare yarn@4.5.1 --activate
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK 27.1.12297006
+        run: sdkmanager "ndk;27.1.12297006"
+
+      # ── Solution B: Dependency cache ─────────────────────────────
+      # Cache key includes both package.json files so any version-pin
+      # change triggers a fresh install.
+      - name: Cache node_modules
+        id: yarn-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            mobile/node_modules
+            mobile/nodejs-src/nodejs-project/node_modules
+          key: yarn-${{ hashFiles('mobile/package.json', 'mobile/nodejs-src/nodejs-project/package.json') }}
+          restore-keys: yarn-
+
+      # On a cold cache, mirror the IPFS-hosted native-prover to a local
+      # file before yarn install runs, so the build never depends on IPFS.
+      - name: Mirror native-prover from IPFS (cold cache only)
+        if: steps.yarn-modules-cache.outputs.cache-hit != 'true'
+        working-directory: mobile/nodejs-src/nodejs-project
+        run: |
+          IPFS_URL=$(node -e "const p=require('./package.json'); console.log(p.dependencies['@railgun-privacy/native-prover'])")
+          echo "Downloading native-prover from: $IPFS_URL"
+          curl -fL "$IPFS_URL" -o native-prover.tgz
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            p.dependencies['@railgun-privacy/native-prover'] = 'file:./native-prover.tgz';
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2));
+          "
+
+      - name: Install dependencies
+        if: steps.yarn-modules-cache.outputs.cache-hit != 'true'
+        working-directory: mobile
+        run: yarn install
+        env:
+          # Skip postinstall: it runs pod-install (iOS/macOS only) and yarn lint.
+          # We run patch-package and jetify explicitly in the next steps.
+          SKIP_POSTINSTALL: "1"
+
+      - name: Apply patches
+        if: steps.yarn-modules-cache.outputs.cache-hit != 'true'
+        working-directory: mobile
+        run: npx patch-package
+
+      - name: Run jetify (AndroidX compat)
+        if: steps.yarn-modules-cache.outputs.cache-hit != 'true'
+        working-directory: mobile
+        run: npx jetify
+
+      # ── Solution A: nodejs-assets cache ──────────────────────────
+      # Hash all of nodejs-src so the expensive Gradle NDK step only
+      # runs when the Node.js backend source actually changes.
+      - name: Hash nodejs-src
+        id: nodejs-hash
+        run: |
+          HASH=$(find mobile/nodejs-src -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+
+      - name: Cache nodejs-assets
+        id: nodejs-cache
+        uses: actions/cache@v4
+        with:
+          path: mobile/nodejs-assets
+          key: nodejs-assets-${{ steps.nodejs-hash.outputs.hash }}
+
+      - name: Build Node.js for Android (cache miss only)
+        if: steps.nodejs-cache.outputs.cache-hit != 'true'
+        working-directory: mobile
+        run: yarn build-nodejs-android
+
+      # ── APK build ────────────────────────────────────────────────
+      - name: Assemble debug APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: railway-debug-${{ github.run_number }}
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
