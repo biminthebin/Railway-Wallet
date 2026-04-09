@@ -32,6 +32,42 @@ jobs:
       - name: Install NDK 27.1.12297006
         run: sdkmanager "ndk;27.1.12297006"
 
+      # ── native-prover IPFS fix ───────────────────────────────────
+      # @railgun-privacy/native-prover is installed from an IPFS URL.
+      # build-nodejs-android COPIES nodejs-src/nodejs-project into
+      # nodejs-assets/nodejs-project and then runs yarn there — so the
+      # tgz must live at a stable path that survives the copy.
+      # We store it at mobile/native-prover.tgz and point package.json
+      # to file:../../native-prover.tgz (resolves to mobile/ from both
+      # nodejs-src/nodejs-project/ and nodejs-assets/nodejs-project/).
+      # Cache it permanently under the pinned version so IPFS is only
+      # hit once ever.
+      - name: Cache native-prover tarball
+        id: native-prover-cache
+        uses: actions/cache@v4
+        with:
+          path: mobile/native-prover.tgz
+          key: native-prover-4.0.3
+
+      - name: Download native-prover from IPFS
+        if: steps.native-prover-cache.outputs.cache-hit != 'true'
+        run: |
+          IPFS_URL=$(node -e "const p=require('./mobile/nodejs-src/nodejs-project/package.json'); console.log(p.dependencies['@railgun-privacy/native-prover'])")
+          echo "Downloading: $IPFS_URL"
+          curl -fL "$IPFS_URL" -o mobile/native-prover.tgz
+
+      # Always patch — fast file write, ensures the correct path is set
+      # before both yarn install (mobile/) and build-nodejs-android.
+      - name: Patch native-prover path to stable location
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkgPath = 'mobile/nodejs-src/nodejs-project/package.json';
+            const p = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            p.dependencies['@railgun-privacy/native-prover'] = 'file:../../native-prover.tgz';
+            fs.writeFileSync(pkgPath, JSON.stringify(p, null, 2));
+          "
+
       # ── Solution B: Dependency cache ─────────────────────────────
       # Cache key includes both package.json files so any version-pin
       # change triggers a fresh install.
@@ -45,22 +81,6 @@ jobs:
           key: yarn-${{ hashFiles('mobile/package.json', 'mobile/nodejs-src/nodejs-project/package.json') }}
           restore-keys: yarn-
 
-      # On a cold cache, mirror the IPFS-hosted native-prover to a local
-      # file before yarn install runs, so the build never depends on IPFS.
-      - name: Mirror native-prover from IPFS (cold cache only)
-        if: steps.yarn-modules-cache.outputs.cache-hit != 'true'
-        working-directory: mobile/nodejs-src/nodejs-project
-        run: |
-          IPFS_URL=$(node -e "const p=require('./package.json'); console.log(p.dependencies['@railgun-privacy/native-prover'])")
-          echo "Downloading native-prover from: $IPFS_URL"
-          curl -fL "$IPFS_URL" -o native-prover.tgz
-          node -e "
-            const fs = require('fs');
-            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            p.dependencies['@railgun-privacy/native-prover'] = 'file:./native-prover.tgz';
-            fs.writeFileSync('package.json', JSON.stringify(p, null, 2));
-          "
-
       - name: Install dependencies
         if: steps.yarn-modules-cache.outputs.cache-hit != 'true'
         working-directory: mobile
@@ -69,11 +89,9 @@ jobs:
           # Skip postinstall: it runs pod-install (iOS/macOS only) and yarn lint.
           # We run patch-package and jetify explicitly in the next steps.
           SKIP_POSTINSTALL: "1"
-          # Yarn 4 automatically enables immutable installs when CI=true (set by
-          # GitHub Actions). Our version pins downgrade react-native-svg and
-          # @react-navigation/bottom-tabs to match their patch files, which
-          # requires yarn.lock to be updated. Explicitly allow it here — drift
-          # prevention comes from the node_modules cache key above, not immutability.
+          # Yarn 4 enables immutable installs when CI=true. Our version pins
+          # require yarn.lock to be updated on first install. Allow it here —
+          # drift prevention comes from the node_modules cache key above.
           YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
 
       - name: Apply patches
