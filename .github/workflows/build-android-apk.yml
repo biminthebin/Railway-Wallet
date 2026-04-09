@@ -129,6 +129,18 @@ jobs:
         run: yarn build-nodejs-android
 
       # ── APK build ────────────────────────────────────────────────
+      # build.gradle hardcodes debug.keystore at mobile/android/app/debug.keystore
+      # with standard Android debug credentials. Generate it fresh each run.
+      - name: Generate debug keystore
+        run: |
+          keytool -genkey -v \
+            -keystore mobile/android/app/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Assemble debug APK
         working-directory: mobile/android
         run: ./gradlew assembleDebug --no-daemon
