@@ -8,6 +8,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Yarn 4 auto-enables immutable installs when CI=true (set by GitHub
+      # Actions). Several steps run yarn internally (main install, the
+      # build-nodejs-android sub-install in nodejs-assets/nodejs-project).
+      # Setting this at job level ensures ALL yarn invocations allow lockfile
+      # updates. Drift prevention comes from the node_modules cache keys.
+      YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
 
     steps:
       - uses: actions/checkout@v4
@@ -89,10 +96,6 @@ jobs:
           # Skip postinstall: it runs pod-install (iOS/macOS only) and yarn lint.
           # We run patch-package and jetify explicitly in the next steps.
           SKIP_POSTINSTALL: "1"
-          # Yarn 4 enables immutable installs when CI=true. Our version pins
-          # require yarn.lock to be updated on first install. Allow it here —
-          # drift prevention comes from the node_modules cache key above.
-          YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
 
       - name: Apply patches
         if: steps.yarn-modules-cache.outputs.cache-hit != 'true'
