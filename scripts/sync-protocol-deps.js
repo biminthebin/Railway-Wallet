@@ -18,13 +18,18 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-// ── Packages we deliberately never touch (patch-package targets) ─────────────
+// ── Packages we deliberately never touch (patch-package targets + API-pinned) ─
 const PINNED_PACKAGES = new Set([
   'nodejs-mobile-react-native',
   'react-native-encrypted-storage',
   'react-native-fs',
   'react-native-svg',
   '@react-navigation/bottom-tabs',
+  // waku-broadcaster-client-node is pinned to 8.4.0 — 9.x added trustedFeeSigner
+  // as a required field in BroadcasterOptions which the mobile code doesn't pass.
+  // Never auto-sync this; any upgrade requires a source-code change in
+  // nodejs-src/nodejs-project/src/services/broadcaster/node-waku-broadcaster-client.ts
+  '@railgun-community/waku-broadcaster-client-node',
 ]);
 
 // ── Packages to sync: upstream desktop deps → mobile/package.json ────────────
@@ -43,10 +48,8 @@ const NODEJS_DEPS_TO_SYNC = [
   '@railgun-community/poseidon-hash-rsjs',
 ];
 
-// Waku broadcaster: desktop uses -web, mobile nodejs-src uses -node.
-// They should stay on the same version number.
-const WAKU_DESKTOP_PKG  = '@railgun-community/waku-broadcaster-client-web';
-const WAKU_NODEJS_PKG   = '@railgun-community/waku-broadcaster-client-node';
+// Waku broadcaster is intentionally NOT synced — mobile is pinned to 8.4.0
+// (last version without breaking API change). See PINNED_PACKAGES above.
 
 // Engine resolution pin — desktop pins this in resolutions{}, we mirror it.
 const ENGINE_PKG = '@railgun-community/engine';
@@ -169,20 +172,8 @@ async function main() {
     if (result) updates.push(result);
   }
 
-  // 4. Sync Waku broadcaster version (desktop -web → mobile nodejs-src -node)
-  const desktopWakuVer = desktopPkg.dependencies?.[WAKU_DESKTOP_PKG];
-  const mobileWakuVer  = nodejsPkg.dependencies?.[WAKU_NODEJS_PKG];
-  if (desktopWakuVer && mobileWakuVer && clean(desktopWakuVer) !== clean(mobileWakuVer)) {
-    if (major(desktopWakuVer) === major(mobileWakuVer)) {
-      console.log(`  [nodejs-src] ${WAKU_NODEJS_PKG}: ${clean(mobileWakuVer)} → ${clean(desktopWakuVer)}`);
-      nodejsPkg.dependencies[WAKU_NODEJS_PKG] = clean(desktopWakuVer);
-      updates.push(`\`${WAKU_NODEJS_PKG}\` ${clean(mobileWakuVer)} → ${clean(desktopWakuVer)} (nodejs-src)`);
-    } else {
-      const msg = `⚠️  **Major version change skipped** — \`${WAKU_NODEJS_PKG}\`: ${clean(mobileWakuVer)} → ${clean(desktopWakuVer)}`;
-      console.warn('  [SKIP major]', WAKU_NODEJS_PKG);
-      appendSummary(msg);
-    }
-  }
+  // 4. Waku broadcaster sync intentionally skipped — pinned to 8.4.0.
+  //    See PINNED_PACKAGES comment for details.
 
   // ── Write changes ────────────────────────────────────────────────────────
   const changed = updates.length > 0;
